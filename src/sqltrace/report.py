@@ -45,6 +45,8 @@ def render_text(result: AnalysisResult) -> str:
             lines.append(f"      via:  {', '.join(column.direct_sources)}")
         if column.constants:
             lines.append(f"      constants: {', '.join(column.constants)}")
+        if column.filter_sources:
+            lines.append(f"      filtered by: {', '.join(column.filter_sources)}")
     if result.diagnostics:
         lines += ["", "Diagnostics:", render_diagnostics(result.diagnostics, result.sql)]
     return "\n".join(lines)
@@ -58,4 +60,6 @@ def render_explanation(result: AnalysisResult, column_name: str) -> str:
     lines.append("Base table dependencies: " + (", ".join(column.base_sources) or "none"))
     if column.constants:
         lines.append("Constants:               " + ", ".join(column.constants))
+    if column.filter_sources:
+        lines.append("Filtered/grouped by:     " + ", ".join(column.filter_sources))
     return "\n".join(lines)

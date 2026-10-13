@@ -24,6 +24,7 @@ class Output:
     expression: str
     kind: str  # "column" | "expression" | "constant"
     constants: List[str] = field(default_factory=list)
+    filter_deps: List[str] = field(default_factory=list)  # WHERE / ON / GROUP BY / HAVING columns
     node_id: str = ""
 
 
@@ -79,6 +80,8 @@ class Resolver:
                 self.graph.add_node(Node(node_id, kind, output.name, output.expression))
                 for dep in output.deps:
                     self.graph.add_edge(dep, node_id)
+                for dep in output.filter_deps:
+                    self.graph.add_filter_edge(dep, node_id)
         return result
 
     def _resolve_raw(
@@ -136,6 +139,7 @@ class Resolver:
                         first.expression,
                         kind,
                         _dedupe(first.constants + second.constants),
+                        _dedupe(first.filter_deps + second.filter_deps),
                     )
                 )
             else:
@@ -160,13 +164,18 @@ class Resolver:
             else:
                 outputs.append(self._single_output(item, target, scope, trace))
 
-        # Other clauses are not part of the lineage, but their columns are still checked.
-        aliases = {output.name.lower() for output in outputs}
+        # Columns of these clauses shape the rows (filter lineage) and are checked for errors.
+        aliases = frozenset(output.name.lower() for output in outputs)
+        filters: List[str] = []
         for join in select.args.get("joins") or []:
-            self._check(join.args.get("on"), scope)
-        self._check(select.args.get("where"), scope)
-        for key in ("group", "having", "qualify", "order"):
-            self._check(select.args.get(key), scope, aliases)
+            filters += self._clause_deps(join.args.get("on"), scope, trace)
+        filters += self._clause_deps(select.args.get("where"), scope, trace)
+        for key in ("group", "having", "qualify"):
+            filters += self._clause_deps(select.args.get(key), scope, trace, aliases)
+        self._clause_deps(select.args.get("order"), scope, trace, aliases)  # checked only
+        filters = _dedupe(filters)
+        for output in outputs:
+            output.filter_deps = list(filters)
         return QueryResult(outputs, complete)
 
     def _single_output(self, item: exp.Expression, target: exp.Expression, scope: Scope, trace: bool) -> Output:
@@ -266,10 +275,13 @@ class Resolver:
         return Source(name, kind, result.scope_id, columns)
 
     # -- expressions -----------------------------------------------------------
-    def _check(self, node: Optional[exp.Expression], scope: Scope, aliases: frozenset = frozenset()) -> None:
-        """Resolve columns of a clause only to report problems (nothing is added to the graph)."""
-        if node is not None:
-            self._analyze(node, scope, trace=False, aliases=aliases)
+    def _clause_deps(
+        self, node: Optional[exp.Expression], scope: Scope, trace: bool, aliases: frozenset = frozenset()
+    ) -> List[str]:
+        """Resolve the columns of a clause (reporting problems) and return what it depends on."""
+        if node is None:
+            return []
+        return self._analyze(node, scope, trace, aliases)[0]
 
     def _analyze(
         self, node: exp.Expression, scope: Scope, trace: bool, aliases: frozenset = frozenset()

@@ -32,6 +32,7 @@ class LineageGraph:
         self._nodes: Dict[str, Node] = {}
         self._preds: Dict[str, List[str]] = {}
         self._succs: Dict[str, List[str]] = {}
+        self._filter_preds: Dict[str, List[str]] = {}
 
     # -- construction -------------------------------------------------------
     def add_node(self, node: Node) -> Node:
@@ -40,6 +41,7 @@ class LineageGraph:
             self._nodes[node.id] = node
             self._preds[node.id] = []
             self._succs[node.id] = []
+            self._filter_preds[node.id] = []
         return self._nodes[node.id]
 
     def add_edge(self, source: str, target: str) -> None:
@@ -49,6 +51,14 @@ class LineageGraph:
         if target not in self._succs[source]:
             self._succs[source].append(target)
             self._preds[target].append(source)
+
+    def add_filter_edge(self, source: str, target: str) -> None:
+        """``source`` is used in a WHERE / ON / GROUP BY / HAVING that shapes ``target``'s rows."""
+        for node_id in (source, target):
+            if node_id not in self._nodes:
+                raise KeyError(f"Unknown node '{node_id}'")
+        if source not in self._filter_preds[target]:
+            self._filter_preds[target].append(source)
 
     # -- inspection ---------------------------------------------------------
     def has_node(self, node_id: str) -> bool:
@@ -80,6 +90,23 @@ class LineageGraph:
     def base_sources(self, node_id: str) -> List[str]:
         """Real-table columns ``node_id`` ultimately depends on."""
         return [n for n in self.upstream(node_id) if self._nodes[n].kind is NodeKind.SOURCE]
+
+    def filter_edges(self) -> List[Tuple[str, str]]:
+        return [(src, dst) for dst, sources in self._filter_preds.items() for src in sources]
+
+    def filter_sources(self, node_id: str) -> List[str]:
+        """Real-table columns that filter/group the rows ``node_id`` is computed from."""
+        found: List[str] = []
+        for current in [node_id] + self.upstream(node_id):
+            for dep in self._filter_preds[current]:
+                if self._nodes[dep].kind is NodeKind.SOURCE:
+                    candidates = [dep]
+                else:  # a subquery output: its own sources and its own filters count too
+                    candidates = self.base_sources(dep) + self.filter_sources(dep)
+                for name in candidates:
+                    if name not in found:
+                        found.append(name)
+        return found
 
     def _reach(self, start: str, links: Dict[str, List[str]]) -> List[str]:
         seen: Set[str] = {start}
@@ -127,6 +154,7 @@ class LineageGraph:
         return {
             "nodes": [node.to_dict() for node in self._nodes.values()],
             "edges": [{"source": src, "target": dst} for src, dst in self.edges()],
+            "filter_edges": [{"source": src, "target": dst} for src, dst in self.filter_edges()],
         }
 
     def to_dot(self) -> str:
@@ -142,6 +170,8 @@ class LineageGraph:
             lines.append(f'  "{_dot(node.id)}" [label="{_dot(node.id)}", fillcolor="{colors[node.kind]}"];')
         for src, dst in self.edges():
             lines.append(f'  "{_dot(src)}" -> "{_dot(dst)}";')
+        for src, dst in self.filter_edges():
+            lines.append(f'  "{_dot(src)}" -> "{_dot(dst)}" [style=dashed];')
         lines.append("}")
         return "\n".join(lines)
 
@@ -154,6 +184,8 @@ class LineageGraph:
             lines.append(f'    {ids[node.id]}["{label}"]:::{node.kind.value}')
         for src, dst in self.edges():
             lines.append(f"    {ids[src]} --> {ids[dst]}")
+        for src, dst in self.filter_edges():
+            lines.append(f"    {ids[src]} -.-> {ids[dst]}")
         lines += [
             "    classDef source fill:#dbeafe,stroke:#1d4ed8",
             "    classDef derived fill:#fef9c3,stroke:#a16207",

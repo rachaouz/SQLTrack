@@ -23,6 +23,7 @@ class OutputColumn:
     direct_sources: List[str]  # what it is computed from, one level down
     base_sources: List[str]  # real-table columns it transitively depends on
     constants: List[str] = field(default_factory=list)
+    filter_sources: List[str] = field(default_factory=list)  # columns in WHERE/ON/GROUP BY/HAVING
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -33,6 +34,7 @@ class OutputColumn:
             "direct_sources": self.direct_sources,
             "base_sources": self.base_sources,
             "constants": self.constants,
+            "filter_sources": self.filter_sources,
         }
 
 
@@ -98,6 +100,7 @@ def analyze(sql: str, schema: Optional[SchemaInput] = None, dialect: Optional[st
             direct_sources=graph.direct_sources(o.node_id),
             base_sources=graph.base_sources(o.node_id),
             constants=o.constants,
+            filter_sources=graph.filter_sources(o.node_id),
         )
         for o in raw_outputs
     ]
