@@ -1,0 +1,4 @@
+{
+  "client": ["id", "nom", "ville"],
+  "commande": ["id", "client_id", "prix", "quantite"]
+}
